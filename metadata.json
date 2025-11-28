@@ -1,0 +1,5 @@
+{
+  "name": "Particle Morph 3D",
+  "description": "A high-performance 3D visualization where thousands of glowing particles morph between a sphere and user-inputted text using Three.js and React.",
+  "requestFramePermissions": []
+}
