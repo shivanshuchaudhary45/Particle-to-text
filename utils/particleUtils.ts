@@ -53,7 +53,8 @@ export const createGlowTexture = (): THREE.Texture => {
 
 /**
  * Samples text from an off-screen canvas to get particle coordinates.
- * improved to automatically size canvas and use jitter for organic distribution.
+ * Enhanced with edge detection to prioritize outlining the text shape,
+ * ensuring legibility even with fewer particles.
  */
 export const sampleTextPositions = (
   text: string, 
@@ -68,26 +69,27 @@ export const sampleTextPositions = (
   
   if (!ctx) return targetPositions;
 
-  // Use a high resolution font size for better sampling detail
-  const fontSize = 120;
-  const fontName = 'Arial, sans-serif';
-  ctx.font = `bold ${fontSize}px ${fontName}`;
+  // 1. Setup Canvas with high resolution
+  // Using a larger font size for better pixel sampling precision
+  const fontSize = 200; 
+  const fontName = 'Arial, sans-serif'; 
+  ctx.font = `900 ${fontSize}px ${fontName}`; // 900 weight for boldness
 
-  // Measure text to fit canvas tightly
   const measure = ctx.measureText(text);
   const textWidth = Math.ceil(measure.width);
-  const textHeight = Math.ceil(fontSize * 1.2); // Estimate height with padding
+  const textHeight = Math.ceil(fontSize * 1.5);
 
-  // Set canvas size with some padding to avoid edge clipping
-  canvas.width = textWidth + 40;
-  canvas.height = textHeight + 40;
+  // Pad canvas to handle edges
+  const padding = 30;
+  canvas.width = textWidth + padding * 2;
+  canvas.height = textHeight + padding * 2;
 
-  // Background must be black
+  // Background Black
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Draw Text
-  ctx.font = `bold ${fontSize}px ${fontName}`;
+  // Draw Text White
+  ctx.font = `900 ${fontSize}px ${fontName}`;
   ctx.fillStyle = '#FFFFFF';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -95,53 +97,78 @@ export const sampleTextPositions = (
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = imageData.data;
+  const width = canvas.width;
+  const height = canvas.height;
   
-  interface Point { x: number; y: number; }
-  const validPixels: Point[] = [];
+  interface Point { x: number; y: number; isEdge: boolean; }
+  const points: Point[] = [];
 
-  // Sampling step: checks every Nth pixel to save performance while maintaining shape
-  // Smaller step = more detail but slower generation
+  const threshold = 30; // Sensitive threshold for anti-aliased pixels
+
+  // Helper to check pixel opacity
+  const getAlpha = (x: number, y: number) => {
+    return data[((y * width) + x) * 4];
+  }
+
+  // 2. Scan Pixels with Edge Detection
+  // Step 2 is a good balance between performance and detail
   const step = 2; 
+  
+  for (let y = 2; y < height - 2; y += step) {
+    for (let x = 2; x < width - 2; x += step) {
+      if (getAlpha(x, y) > threshold) {
+        // It's a text pixel. Check neighbors to find edges.
+        // We check neighbors at distance 'step' to align with grid
+        const nT = getAlpha(x, y - step);
+        const nB = getAlpha(x, y + step);
+        const nL = getAlpha(x - step, y);
+        const nR = getAlpha(x + step, y);
 
-  for (let y = 0; y < canvas.height; y += step) {
-    for (let x = 0; x < canvas.width; x += step) {
-      const i = (y * canvas.width + x) * 4;
-      // Check Red channel (since white text is 255, 255, 255)
-      // Using a threshold > 128 ensures we stick to the core of the letter
-      if (data[i] > 100) { 
-        validPixels.push({ x, y });
+        // If any neighbor is dark (below threshold), this is an edge
+        const isEdge = nT < threshold || nB < threshold || nL < threshold || nR < threshold;
+        
+        points.push({ x, y, isEdge });
       }
     }
   }
 
-  if (validPixels.length === 0) return targetPositions;
+  if (points.length === 0) return targetPositions;
 
-  // Scale calculations to fit the text into the 3D viewport
-  // We want the text to roughly span 15 world units wide
-  const targetWidth = 15;
-  const scale = targetWidth / canvas.width;
+  // 3. Sort & Distribute
+  // Edges first ensures the outline is drawn even if we run out of particles.
+  const edges = points.filter(p => p.isEdge);
+  const interior = points.filter(p => !p.isEdge);
   
-  const offsetX = canvas.width / 2;
-  const offsetY = canvas.height / 2;
+  // Custom shuffle for organic distribution
+  const shuffle = (arr: Point[]) => {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  };
 
-  // Assign particles to valid pixels
+  // Combine: Edges first, then random interior points
+  const sortedPoints = [...shuffle(edges), ...shuffle(interior)];
+  
+  // Calculate Scale to fit the text into the 3D viewport
+  const targetWorldWidth = 18; 
+  const scale = targetWorldWidth / width;
+  const offsetX = width / 2;
+  const offsetY = height / 2;
+
   for (let i = 0; i < particleCount; i++) {
-    // Round-robin assignment if we have more particles than pixels
-    const pixelIndex = i % validPixels.length;
-    const pixel = validPixels[pixelIndex];
+    // Wrap around if we have more particles than sampled points
+    const pt = sortedPoints[i % sortedPoints.length];
+    
+    // Apply less jitter on edges to keep them sharp, more on interior to fill volume
+    const jitterRange = pt.isEdge ? 0.25 : 2.5; 
+    const jx = (Math.random() - 0.5) * jitterRange;
+    const jy = (Math.random() - 0.5) * jitterRange;
 
-    // Jitter: Add random offset to prevent particles from stacking on the exact same grid points.
-    // Since we sampled with `step`, the jitter should cover that gap.
-    const jitterX = (Math.random() - 0.5) * step;
-    const jitterY = (Math.random() - 0.5) * step;
-
-    // Normalize coordinates: 0,0 is center of screen
-    const rawX = (pixel.x - offsetX) + jitterX;
-    const rawY = -(pixel.y - offsetY) + jitterY; // Invert Y for 3D coordinate system
-
-    targetPositions[i * 3] = rawX * scale;
-    targetPositions[i * 3 + 1] = rawY * scale;
-    targetPositions[i * 3 + 2] = 0; // Flat 2D Text
+    targetPositions[i * 3] = (pt.x - offsetX + jx) * scale;
+    targetPositions[i * 3 + 1] = -(pt.y - offsetY + jy) * scale;
+    targetPositions[i * 3 + 2] = 0;
   }
 
   return targetPositions;

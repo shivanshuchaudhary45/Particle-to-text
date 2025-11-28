@@ -14,7 +14,8 @@
     "@react-three/fiber": "^9.4.0",
     "three": "^0.181.2",
     "lucide-react": "^0.555.0",
-    "@react-three/drei": "^10.7.7"
+    "@react-three/drei": "^10.7.7",
+    "@react-three/postprocessing": "^3.0.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
