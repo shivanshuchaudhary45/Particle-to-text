@@ -75,7 +75,11 @@ const App: React.FC = () => {
       <div className="absolute inset-0 z-0">
         <Canvas
           camera={{ position: [0, 0, 12], fov: 45 }}
-          gl={{ antialias: true, alpha: false }}
+          gl={{ 
+            antialias: true, 
+            alpha: true, // Allow transparency to prevent potential composer clearing issues
+            powerPreference: "high-performance"
+          }}
           dpr={[1, 2]} 
         >
           <color attach="background" args={['#050510']} />
