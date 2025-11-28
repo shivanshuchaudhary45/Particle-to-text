@@ -1,6 +1,6 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { generateSpherePositions, createGlowTexture, sampleTextPositions } from '../utils/particleUtils';
 
 interface ParticleSceneProps {
@@ -26,50 +26,54 @@ const ParticleScene: React.FC<ParticleSceneProps> = ({
 }) => {
   const pointsRef = useRef<THREE.Points>(null);
   const geometryRef = useRef<THREE.BufferGeometry>(null);
-  const materialRef = useRef<THREE.PointsMaterial>(null);
+  const { viewport } = useThree();
 
   // Track accumulated auto-rotation separately from mouse interaction
   const autoRotationY = useRef(0);
 
-  // Memoize target color
-  const targetColor = useMemo(() => new THREE.Color(color), [color]);
-
-  // 1. Source Data (Immutable)
-  // These arrays hold the ideal "Target" positions for Sphere and Text states.
-  // We must NOT mutate these arrays.
+  // Generate initial Sphere positions (constant)
   const spherePositions = useMemo(() => {
     return generateSpherePositions(particleCount, SPHERE_RADIUS);
   }, [particleCount]);
 
+  // Generate Text Target positions (re-runs when text changes)
   const textPositions = useMemo(() => {
+    // New simplified call - utility handles canvas sizing automatically
     return sampleTextPositions(text, particleCount);
   }, [text, particleCount]);
-
-  // 2. Display Buffer (Mutable)
-  // This is the array we pass to the GPU. We initialize it as a copy of spherePositions.
-  // R3F will use this for the initial render, and we will update it in useFrame.
-  const displayPositions = useMemo(() => {
-    return new Float32Array(spherePositions); 
-  }, [spherePositions]);
 
   // Texture for particles
   const sprite = useMemo(() => createGlowTexture(), []);
 
-  // Animation State
+  // Animation State Refs (to avoid re-renders on every frame)
+  // Initialize with correct size, but we handle resizing in useEffect
+  const currentPositionsRef = useRef<Float32Array>(new Float32Array(particleCount * 3));
   const morphProgress = useRef(0); // 0 = sphere, 1 = text
+
+  // Initialize current positions to sphere positions and handle resize
+  useEffect(() => {
+    // If the particle count changed, the ref array might be the wrong size
+    if (currentPositionsRef.current.length !== spherePositions.length) {
+      currentPositionsRef.current = new Float32Array(spherePositions.length);
+    }
+    
+    currentPositionsRef.current.set(spherePositions);
+
+    if (geometryRef.current) {
+        geometryRef.current.setAttribute(
+            'position', 
+            new THREE.BufferAttribute(currentPositionsRef.current, 3)
+        );
+    }
+  }, [spherePositions]);
 
   useFrame((state, delta) => {
     if (isPaused || !pointsRef.current || !geometryRef.current) return;
 
-    // --- Color Interpolation ---
-    if (materialRef.current) {
-        materialRef.current.color.lerp(targetColor, delta * 3);
-    }
-
-    // --- Morph Logic ---
+    // 1. Calculate Morph Progress
     const targetProgress = isMorphing && text.length > 0 ? 1 : 0;
     
-    // Smooth dampening
+    // Smooth dampening towards target
     const diff = targetProgress - morphProgress.current;
     if (Math.abs(diff) > 0.001) {
       morphProgress.current += diff * Math.min(delta * MORPH_SPEED, 1);
@@ -78,31 +82,38 @@ const ParticleScene: React.FC<ParticleSceneProps> = ({
     }
 
     const t = morphProgress.current;
-    const ease = t * t * (3 - 2 * t); // SmoothStep
+    
+    // Easing function (SmoothStep)
+    // ease = t * t * (3 - 2 * t)
+    const ease = t * t * (3 - 2 * t);
 
-    // --- Rotation ---
-    const sphereRotationSpeed = 0.1 * (1 - ease * 0.8);
+    // 2. Rotation & Parallax Logic
+    // Update auto-rotation (only when in sphere mode mostly, but looks good always)
+    const sphereRotationSpeed = 0.1 * (1 - ease * 0.8); // Slow down slightly when text
     autoRotationY.current += sphereRotationSpeed * delta;
 
-    const parallaxX = state.pointer.y * 0.3; 
-    const parallaxY = state.pointer.x * 0.3; 
+    // Mouse Parallax
+    // state.pointer x/y are normalized (-1 to 1)
+    const parallaxX = state.pointer.y * 0.3; // Tilt Up/Down
+    const parallaxY = state.pointer.x * 0.3; // Tilt Left/Right
 
+    // Apply combined rotation
+    // Y Axis: Auto spin + Mouse horizontal tilt
     pointsRef.current.rotation.y = autoRotationY.current + (parallaxY * 0.5);
+    
+    // X Axis: Slight wobble + Mouse vertical tilt
     const wobble = Math.sin(state.clock.elapsedTime * 0.5) * 0.1 * (1 - ease);
     pointsRef.current.rotation.x = wobble - (parallaxX * 0.5);
 
-    // --- Position Update ---
-    // We read from the IMMUTABLE source arrays (spherePositions, textPositions)
-    // And write to the MUTABLE buffer attribute (positions)
+    // 3. Update Individual Particles
     const positions = geometryRef.current.attributes.position.array as Float32Array;
     
-    // Safety check
+    // Safety check for array size mismatch during hot reload or rapid updates
     if (positions.length !== particleCount * 3) return;
 
     for (let i = 0; i < particleCount; i++) {
       const i3 = i * 3;
 
-      // READ from sources
       const sx = spherePositions[i3];
       const sy = spherePositions[i3 + 1];
       const sz = spherePositions[i3 + 2];
@@ -111,13 +122,13 @@ const ParticleScene: React.FC<ParticleSceneProps> = ({
       const ty = textPositions[i3 + 1];
       const tz = textPositions[i3 + 2];
 
-      // Calculate noise
+      // Add noise/wobble during transition
       const wobbleIntensity = Math.sin(t * Math.PI) * 2; 
       const noiseX = (Math.random() - 0.5) * wobbleIntensity * 0.2;
       const noiseY = (Math.random() - 0.5) * wobbleIntensity * 0.2;
       const noiseZ = (Math.random() - 0.5) * wobbleIntensity * 0.5;
 
-      // WRITE to display buffer
+      // Interpolate
       positions[i3]     = sx * (1 - ease) + tx * ease + noiseX;
       positions[i3 + 1] = sy * (1 - ease) + ty * ease + noiseY;
       positions[i3 + 2] = sz * (1 - ease) + tz * ease + noiseZ;
@@ -132,13 +143,11 @@ const ParticleScene: React.FC<ParticleSceneProps> = ({
         <bufferAttribute
           attach="attributes-position"
           count={particleCount}
-          array={displayPositions}
+          array={spherePositions} // Initial dummy data, updated in useFrame via attribute
           itemSize={3}
-          usage={THREE.DynamicDrawUsage}
         />
       </bufferGeometry>
       <pointsMaterial
-        ref={materialRef}
         size={particleSize}
         map={sprite}
         transparent
@@ -146,7 +155,7 @@ const ParticleScene: React.FC<ParticleSceneProps> = ({
         alphaTest={0.01}
         blending={THREE.AdditiveBlending}
         depthWrite={false}
-        color={new THREE.Color(color)} 
+        color={new THREE.Color(color)}
       />
     </points>
   );

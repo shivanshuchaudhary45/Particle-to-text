@@ -1,7 +1,6 @@
-import React, { useState, Suspense, useCallback, useEffect } from 'react';
+import React, { useState, Suspense, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import ParticleScene from './components/ParticleScene';
 import { Settings } from 'lucide-react';
 
@@ -34,23 +33,6 @@ const App: React.FC = () => {
   const [activeColor, setActiveColor] = useState(THEMES[0].color);
   const [particleCount, setParticleCount] = useState(8000);
   const [showSettings, setShowSettings] = useState(false);
-  const [autoCycle, setAutoCycle] = useState(false);
-
-  // Auto-cycle effect
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (autoCycle) {
-      interval = setInterval(() => {
-        setActiveColor((prev) => {
-          const currentIndex = THEMES.findIndex(t => t.color === prev);
-          // If current color isn't in themes (unlikely), start at 0
-          const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % THEMES.length;
-          return THEMES[nextIndex].color;
-        });
-      }, 4000); // Cycle every 4 seconds
-    }
-    return () => clearInterval(interval);
-  }, [autoCycle]);
 
   const handleMorph = useCallback(() => {
     const trimmed = inputValue.trim();
@@ -75,11 +57,7 @@ const App: React.FC = () => {
       <div className="absolute inset-0 z-0">
         <Canvas
           camera={{ position: [0, 0, 12], fov: 45 }}
-          gl={{ 
-            antialias: true, 
-            alpha: true, // Allow transparency to prevent potential composer clearing issues
-            powerPreference: "high-performance"
-          }}
+          gl={{ antialias: true, alpha: false }}
           dpr={[1, 2]} 
         >
           <color attach="background" args={['#050510']} />
@@ -96,14 +74,6 @@ const App: React.FC = () => {
               color={activeColor}
               particleCount={particleCount}
             />
-            <EffectComposer>
-              <Bloom 
-                luminanceThreshold={0.2} 
-                luminanceSmoothing={0.9} 
-                height={300} 
-                intensity={1.2} 
-              />
-            </EffectComposer>
           </Suspense>
           
           <OrbitControls 
@@ -123,7 +93,7 @@ const App: React.FC = () => {
         <header className="flex justify-between items-start pointer-events-auto">
           <div className="bg-white/5 backdrop-blur-sm border border-white/10 p-4 rounded-xl">
             <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500">
-              Particle Morph 3D
+              Particle Morph
             </h1>
             <p className="text-xs text-gray-400 mt-1 max-w-[200px]">
               Type text below to transform the 3D sphere.
@@ -155,30 +125,12 @@ const App: React.FC = () => {
         {showSettings && (
             <div className="pointer-events-auto absolute top-24 right-6 bg-black/60 backdrop-blur-xl border border-white/10 p-5 rounded-xl shadow-2xl w-72 animate-in fade-in slide-in-from-top-4 duration-200 z-50">
                 <div className="mb-5">
-                  <div className="flex justify-between items-center mb-3">
-                    <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Theme Color</h3>
-                    
-                    {/* Auto Cycle Toggle */}
-                    <div className="flex items-center gap-2">
-                       <label htmlFor="auto-cycle" className="text-[10px] text-gray-400 cursor-pointer select-none">AUTO CYCLE</label>
-                       <button 
-                         id="auto-cycle"
-                         onClick={() => setAutoCycle(!autoCycle)}
-                         className={`w-8 h-4 rounded-full relative transition-colors ${autoCycle ? 'bg-cyan-500' : 'bg-white/20'}`}
-                       >
-                         <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${autoCycle ? 'translate-x-4' : 'translate-x-0'}`} />
-                       </button>
-                    </div>
-                  </div>
-                  
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wider">Theme Color</h3>
                   <div className="flex flex-wrap gap-3">
                       {THEMES.map((theme) => (
                           <button
                               key={theme.name}
-                              onClick={() => {
-                                setActiveColor(theme.color);
-                                setAutoCycle(false); // Manually selecting disables auto cycle
-                              }}
+                              onClick={() => setActiveColor(theme.color)}
                               className={`w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 ${activeColor === theme.color ? 'border-white scale-110 shadow-[0_0_10px_rgba(255,255,255,0.5)]' : 'border-transparent'}`}
                               style={{ backgroundColor: theme.color }}
                               title={theme.name}
